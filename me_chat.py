@@ -1,6 +1,7 @@
-from agents import Runner, Agent
+from agents import Runner, Agent, InputGuardrailTripwireTriggered
 from tools import get_blog_rss_feed, get_podcast_rss_feed, record_unknown_question, record_user_details
 from my_agents import content_summarizer_agent
+from utils.input_guardrails import check_content_moderation, check_input_length, check_input_format
 from pypdf import PdfReader
 from dotenv import load_dotenv
 import asyncio
@@ -27,13 +28,14 @@ class MeChat:
         # Build system prompt
         self.system_prompt = self._build_system_prompt()
 
-        # Set up the Agent with the tools
+        # Set up the Agent with the tools and input guardrails
         all_tools = [get_blog_rss_feed, get_podcast_rss_feed, record_unknown_question, record_user_details]
         self.chat_agent = Agent(
             name="Chat agent",
             instructions=self.system_prompt,
             tools=all_tools,
-            model=OPENAI_MODEL
+            model=OPENAI_MODEL,
+            input_guardrails=[check_input_format, check_input_length, check_content_moderation]
         )
 
     def _load_pdf_content(self, file_path: str) -> str:
@@ -86,7 +88,7 @@ With this context, please chat with the user, always staying in character as {se
 
     def chat(self, message, history):
         """
-        Handle chat messages.
+        Handle chat messages with input guardrail protection.
 
         Args:
             message: The user's message (str or dict)
@@ -97,10 +99,32 @@ With this context, please chat with the user, always staying in character as {se
         """
         user_message = message.get("text", "") if isinstance(message, dict) else message
 
-        result = asyncio.run(Runner.run(self.chat_agent, user_message))
-        response = result.final_output if hasattr(result, 'final_output') else str(result)
-        print(f"Agent response: {response[:100]}...")
-        return response
+        try:
+            result = asyncio.run(Runner.run(self.chat_agent, user_message))
+            response = result.final_output if hasattr(result, 'final_output') else str(result)
+            print(f"Agent response: {response[:100]}...")
+            return response
+        except InputGuardrailTripwireTriggered as e:
+            # Handle guardrail violations gracefully
+            guardrail_name = e.guardrail_result.guardrail.get_name()
+            output_info = e.guardrail_result.output.output_info
+
+            print(f"Input guardrail triggered: {guardrail_name}, info: {output_info}")
+
+            # Return user-friendly error messages based on the guardrail
+            if guardrail_name == "content_moderation":
+                return "I'm sorry, but I cannot process that message as it appears to contain content that violates our usage policies. Please rephrase your question in a respectful manner."
+            elif guardrail_name == "input_length_validation":
+                max_length = output_info.get('max_length', 10000)
+                return f"I'm sorry, but your message is too long. Please keep your message under {max_length} characters."
+            elif guardrail_name == "input_format_validation":
+                reason = output_info.get('reason', 'invalid format')
+                return f"I'm sorry, but your message has a formatting issue: {reason}. Please try again."
+            else:
+                return "I'm sorry, but I couldn't process your message. Please try rephrasing your question."
+        except Exception as e:
+            print(f"Error in chat: {str(e)}")
+            return f"I apologize, but an error occurred while processing your message. Please try again."
 
 
 if __name__ == "__main__":
