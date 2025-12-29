@@ -19,7 +19,7 @@ A simple chatbot application that uses OpenAI Agents SDK to answer questions abo
 
 1. **Clone the repository**
    ```bash
-   git clone <your-repo-url>
+   git clone https://github.com/thomasma/openaiagentsdk
    cd openaiagentsdk
    ```
 
